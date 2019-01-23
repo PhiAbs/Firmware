@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 
-def setup_dataframe(self, filepath, topics):
+def setup_dataframe(self, filepath, topics, COLUMNS_ZERO_ORDER_HOLD):
     # Check if any of the topics exist in the topics exists in the log file
     try:
         self.ulog = pyulog.ULog(filepath, topics)
@@ -32,7 +32,7 @@ def setup_dataframe(self, filepath, topics):
         print(topics)
         pytest.skip("Skip this test because topics are missing")
     else:
-        self.df = ulogconv.merge(ulogconv.createPandaDict(self.ulog))
+        self.df = ulogconv.merge(ulogconv.createPandaDict(self.ulog), COLUMNS_ZERO_ORDER_HOLD)
     
     # return self
 
@@ -49,7 +49,9 @@ class TestAttitude:
             "vehicle_status",
         ]
 
-        setup_dataframe(self, filepath, topics)
+        COLUMNS_ZERO_ORDER_HOLD = []
+
+        setup_dataframe(self, filepath, topics, COLUMNS_ZERO_ORDER_HOLD)
     
         # During Manual / Stabilized and Altitude, the tilt threshdol should not exceed
         # MPC_MAN_TILT_MAX
@@ -83,7 +85,9 @@ class TestRTLHeight:
             "vehicle_status",
         ]
 
-        setup_dataframe(self, filepath, topics)
+        COLUMNS_ZERO_ORDER_HOLD = []
+
+        setup_dataframe(self, filepath, topics, COLUMNS_ZERO_ORDER_HOLD)
 
         # drone parameters: below rtl_min_dist, the drone follows different rules than outside of it.
         rtl_min_dist = (
@@ -132,7 +136,64 @@ class TestRTLHeight:
 
                 elif (distance_at_RTL >= rtl_min_dist) & (height_at_RTL > rtl_return_alt): 
                     assert max_height_during_RTL < height_at_RTL + thresh
-                        
+
+
+
+
+class TestAvoidance:
+    """
+    Test Avoidance related constraints
+    """
+    def test_no_detection_no_movement(self, filepath):
+        """
+        As long as the drone does not detect anything, it should not make any large movements while there is no stick input.
+        """
+
+        topics = [
+            "vehicle_status",
+            "distance_sensor", # 
+            "manual_control_setpoint", #obsavoid_switch, 
+        ]
+
+        COLUMNS_ZERO_ORDER_HOLD = []
+
+        setup_dataframe(self, filepath, topics, COLUMNS_ZERO_ORDER_HOLD)
+
+        NAVIGATION_STATE_POSCTL = 2 # TODO get that param directly from the log file??
+        MINIMUM_INCREMENT = 5
+        MPC_HOLD_DZ = 0.1
+
+        # check if vehicle_status is equal to NAVIGATION_STATE_POSCTL. extract all rows for which that is valid
+        # check if obsavoid_switch is turned on (turned on means values 1 and 2. value 3 means turned off).  extract all rows for which that is valid
+        # check the manual control setpoints for x and y. They have to be close to zero, thus they have to be smaller than MPC_HOLD_DZ = 0.1
+        self.df["avoidance_test_conditions"] = \
+        (
+            (self.df["T_vehicle_status_0__F_nav_state"] == NAVIGATION_STATE_POSCTL) & \
+            (self.df["T_manual_control_setpoint_0__F_obsavoid_switch"] == 1) & \
+            (self.df["T_manual_control_setpoint_0__F_obsavoid_switch"] == 2) & \
+            (self.df["T_manual_control_setpoint_0__F_x"].abs() < MPC_HOLD_DZ) & \
+            (self.df["T_manual_control_setpoint_0__F_y"].abs() < MPC_HOLD_DZ)
+        )
+
+        # check the distance sensor. No obstacle: distance_sensor.current_distance is equal to MINIMUM_INCREMENT = 5
+        # find all entries where the distance sensor indicates that there is no object in front of the drone.  
+        self.df["no_obstacle"] = (self.df["T_distance_sensor_0__F_current_distance"] != MINIMUM_INCREMENT)
+        # print(self.df["T_distance_sensor_0__F_current_distance"])
+
+        # extract the position setpoints in x and y direction: vehicle_local_position_setpoint_0.x and .y
+        self.df = self.df.drop(self.df[self.df["avoidance_test_conditions"] == True].index)
+
+        # group the remaining entries. Every group has to contain more than a certain number of values in order to be used in the test
+        state_group = self.df.groupby(["no_obstacle"])
+
+        # for g, d in state_group:
+        #     if d.len
+
+        # print(self.df["avoidance_test_conditions"])
+
+
+        assert True
+
 
 
 # class TestSomething:
